@@ -14,13 +14,50 @@ function buildMapSelect(maps, esc, pad) {
     .join('\n');
 }
 
+/** Eligibility INSERT: direct = A.<value> (staging column name), else expression/hardcoded/null. */
+function buildInsertSelectValues(maps, esc, pad) {
+  return maps
+    .map((m, i) => {
+      const expr =
+        m.type === 'null'
+          ? 'NULL'
+          : m.type === 'direct'
+            ? `A.${m.value}`
+            : m.type === 'hardcoded'
+              ? `''${esc(m.value)}''`
+              : esc(m.value);
+      return `${i === 0 ? pad(21, '') : pad(21, ', ')}${expr}`;
+    })
+    .join('\n');
+}
+
+/** Member INSERT: optional insertExpr overrides; else NULL or A.<target> after staging + joins. */
+function buildMemberInsertValues(maps, esc, pad) {
+  return maps
+    .map((m, i) => {
+      const override = m.insertExpr != null && String(m.insertExpr).trim() !== '';
+      const expr = override
+        ? esc(m.insertExpr)
+        : m.type === 'null'
+          ? 'NULL'
+          : `A.${m.target}`;
+      return `${i === 0 ? pad(21, '') : pad(21, ', ')}${expr}`;
+    })
+    .join('\n');
+}
+
+function buildInsertColumnList(maps, basePad) {
+  return maps
+    .map((m, i) => `${' '.repeat(basePad)}${i === 0 ? '' : ', '}${m.target}`)
+    .join('\n');
+}
+
 /**
- * Universal eligibility scrub: stream → normalized staging (from mappings) →
- * employee/dependent reconciliation → latest row per member key → enrollment slice →
- * MAP_MEMBER + MAP_ELIGIBILITY loads → employee-id crosswalk → coverage type derivation →
- * employee name enrichment on dependents.
+ * Eligibility scrub: raw dedup → STAGING from MAP_MEMBER-style mappings (raw columns, like pharmacy) →
+ * reconciliation CTEs → MAP_MEMBER insert (optional insertExpr per column for A/B/C joins) →
+ * MAP_ELIGIBILITY → crosswalks and dependent enrichment.
  */
-export function generateEligibilitySQL(cfg, rawFields, maps) {
+export function generateEligibilitySQL(cfg, rawFields, mapsMember, mapsEligibility) {
   const esc = s => String(s).replace(/'/g, "''");
   const pad = (n, s) => ' '.repeat(n) + s;
 
@@ -28,14 +65,6 @@ export function generateEligibilitySQL(cfg, rawFields, maps) {
   const mk = cfg.memberKeyExpression ?? "UPPER(TRIM(FIRST_NAME))||UPPER(TRIM(LAST_NAME))||DOB||TRIM(UPPER(GENDER))";
   const mk2 = cfg.memberSecondaryKeyExpression ?? 'TRIM(MEMBER_ID)';
   const empRel = esc(cfg.employeeRelationshipValue ?? 'EMPLOYEE');
-  const carrierId = esc(cfg.carrierId ?? 'CARRIER');
-  const carrierName = esc(cfg.carrierName ?? 'CARRIER');
-  const benefitType = esc(cfg.benefitType ?? 'MEDICAL');
-  const policyId = esc(cfg.policyId ?? '');
-  const defaultChEmp = esc(cfg.defaultChEmployerId ?? '802');
-  const planType = cfg.planTypeExpression ?? 'NULL';
-  const planId = cfg.planIdExpression ?? 'GROUP_ID';
-  const planName = cfg.planNameExpression ?? 'GROUP_ID';
 
   const dedupCols = rawFields
     .map((f, i) => {
@@ -44,7 +73,11 @@ export function generateEligibilitySQL(cfg, rawFields, maps) {
     })
     .join('\n');
 
-  const insertBody = buildMapSelect(maps, esc, pad);
+  const insertBody = buildMapSelect(mapsMember, esc, pad);
+  const memberColList = buildInsertColumnList(mapsMember, 23);
+  const memberValList = buildMemberInsertValues(mapsMember, esc, pad);
+  const eligColList = buildInsertColumnList(mapsEligibility, 23);
+  const eligValList = buildInsertSelectValues(mapsEligibility, esc, pad);
   const listaggComma = "''" + "," + "''";
 
   return `CREATE OR REPLACE PROCEDURE ${cfg.schema}.SP_SCRUB_STREAM_${cfg.clientName}_ELIGIBILITY()
@@ -177,7 +210,9 @@ ${insertBody}
                      FROM STAGING_ELIGIBILITY_'||CURRENTTIMESTAMP||'';
 
   EXECUTE IMMEDIATE 'TRUNCATE TABLE '||MEMBER_TABLE;
-  EXECUTE IMMEDIATE 'INSERT INTO '||MEMBER_TABLE||'
+  EXECUTE IMMEDIATE 'INSERT INTO '||MEMBER_TABLE||' (
+${memberColList}
+                     )
                      WITH CTE_ZIP AS
                      (
                      SELECT TRIM(ZIP_CODE) AS ZIP_CODE
@@ -188,132 +223,17 @@ ${insertBody}
                      QUALIFY ROW_NUMBER() OVER (PARTITION BY ZIP_CODE ORDER BY CITY DESC) = 1
                      )
                      SELECT
-                       NULL AS CH_MEMBER_ID
-                     , COALESCE(C.CH_EMPLOYER_ID, ''${defaultChEmp}'') AS CH_EMPLOYER_ID
-                     , A.MEMBER_ID
-                     , A.GROUP_ID
-                     , A.EMPLOYEE_ID
-                     , A.FIRST_NAME
-                     , A.MIDDLE_NAME
-                     , A.LAST_NAME
-                     , COALESCE(A.SSN, LEFT(A.MEMBER_ID, 9)) AS SSN
-                     , A.GENDER
-                     , A.DOB
-                     , UPPER(A.ADDRESS_1) AS ADDRESS_1
-                     , UPPER(A.ADDRESS_2) AS ADDRESS_2
-                     , UPPER(COALESCE(A.CITY, B.CITY)) AS CITY
-                     , UPPER(B.COUNTY) AS COUNTY
-                     , UPPER(COALESCE(A.STATE, B.STATE)) AS STATE
-                     , A.ZIP_CODE
-                     , A.MARITAL_STATUS
-                     , A.RACE
-                     , A.ETHNIC_GROUP
-                     , A.EDUCATION_LEVEL
-                     , A.RELATIONSHIP
-                     , A.AGE_RANGE
-                     , A.OFFICE_LOCATION
-                     , A.ALTERNATE_MEMBER_ID
-                     , A.PHONE_HOME
-                     , A.PHONE_WORK
-                     , A.PHONE_MOBILE
-                     , A.EMAIL_ADDRESS_HOME
-                     , A.EMAIL_ADDRESS_WORK
-                     , A.MEMBER_STATUS
-                     , A.PHS_REVIEWED
-                     , A.ENGAGED
-                     , A.MERGE_DT
-                     , A.MERGED_INTO
-                     , A.PHA_ENGAGEMENT_DATE
-                     , A.CC_ENGAGEMENT_DATE
-                     , A.PROGRAM_TYPE_ID
-                     , A.FIRST_NAME_EDITED
-                     , A.MIDDLE_NAME_EDITED
-                     , A.LAST_NAME_EDITED
-                     , A.GENDER_EDITED
-                     , A.ADDRESS_1_EDITED
-                     , A.ADDRESS_2_EDITED
-                     , A.CITY_EDITED
-                     , A.STATE_EDITED
-                     , A.ZIP_CODE_EDITED
-                     , A.EMAIL_ADDRESS_EDITED
-                     , A.CELL_PHONE_EDITED
-                     , A.WORK_PHONE_EDITED
-                     , A.HOME_PHONE_EDITED
-                     , A.ETHNIC_GROUP_EDITED
-                     , A.USER_LAST_EDITED_BY_ID
-                     , A.LAST_EDITED_TIMESTAMP
-                     , A.UDF1
-                     , A.UDF2
-                     , A.SOURCEFILENAME
-                     , A.RECEIVED_DATE
-                     , A.IMPORT_DATE
-                     , CURRENT_DATE() AS SCRUBBED_DATE
-                     , A.DATA_SOURCE
-                     , A.JOB_TITLE
-                     , A.INCOME_LEVEL
-                     , A.BUSINESS_UNIT
-                     , A.EMPLOYEE_SSN
-                     , A.EMPLOYEE_FIRST_NAME
-                     , A.EMPLOYEE_MIDDLE_NAME
-                     , A.EMPLOYEE_LAST_NAME
-                     , A.PCP_NPI
-                     , A.PCP_NAME
-                     , A.PCP_DATE_LAST_SEEN
-                     , A.PCP_DATE_FIRST_SEEN
-                     , A.ENGAGED_WITH_PCP
-                     , A.NO_OF_PCP_VISITS_SEEN_LAST12_MONTHS
-                     , A.PCP_SOURCE
-                     , A.ATTRIBUTED_PCP_NPI
-                     , A.ATTRIBUTED_PCP_NAME
-                     , A.ATTRIBUTED_PCP_DATE_LAST_SEEN
-                     , A.ATTRIBUTED_PCP_DATE_FIRST_SEEN
-                     , A.ENGAGED_WITH_ATTRIBUTED_PCP
-                     , A.NO_OF_ATTRIBUTED_PCP_VISITS_SEEN_LAST12_MONTHS
-                     , A.ATTRIBUTED_PCP_SOURCE
-                     , TO_VARCHAR(A.MEMBER_ID_2) AS UDF3
-                     , A.UDF4
-                     , A.UDF5
+${memberValList}
                      FROM RECEIVED_ELIGIBILITY_LATEST_INFO_'||CURRENTTIMESTAMP||' A
                      LEFT JOIN CTE_ZIP B ON TRIM(A.ZIP_CODE) = B.ZIP_CODE
                      LEFT JOIN '||MASTER_CLIENT_GROUP||' C ON A.GROUP_ID = C.GROUP_ID';
 
   EXECUTE IMMEDIATE 'TRUNCATE TABLE '||ELIGIBILITY_TABLE;
-  EXECUTE IMMEDIATE 'INSERT INTO '||ELIGIBILITY_TABLE||'
+  EXECUTE IMMEDIATE 'INSERT INTO '||ELIGIBILITY_TABLE||' (
+${eligColList}
+                     )
                      SELECT
-                       NULL AS CH_ELIGIBILITY_ID
-                     , NULL AS RECORD_ID
-                     , NULL AS CH_MEMBER_ID
-                     , COALESCE(C.CH_EMPLOYER_ID, ''${defaultChEmp}'') AS CH_EMPLOYER_ID
-                     , A.MEMBER_ID
-                     , A.GROUP_ID
-                     , A.EMPLOYEE_ID
-                     , ''${policyId}'' AS POLICY_ID
-                     , ${planType} AS PLAN_TYPE
-                     , ''${carrierId}'' AS CARRIER_ID
-                     , ''${carrierName}'' AS CARRIER_NAME
-                     , NULL AS COVERAGE_TYPE
-                     , ${planId} AS PLAN_ID
-                     , ${planName} AS PLAN_NAME
-                     , ''${benefitType}'' AS BENEFIT_TYPE
-                     , B.EFFECTIVE_DATE
-                     , B.TERMINATION_DATE
-                     , NULL AS MERGE_DT
-                     , NULL AS MERGED_FROM_CH_MEMBER_ID
-                     , NULL AS MERGED_FROM_MEMBER_ID
-                     , A.SOURCEFILENAME
-                     , A.RECEIVED_DATE
-                     , A.IMPORT_DATE
-                     , CURRENT_DATE() AS SCRUBBED_DATE
-                     , A.DATA_SOURCE
-                     , A.FIRST_NAME
-                     , A.LAST_NAME
-                     , A.DOB
-                     , A.GENDER
-                     , A.UDF1 AS UDF1
-                     , A.UDF2 AS UDF2
-                     , A.UDF3 AS UDF3
-                     , A.UDF4 AS UDF4
-                     , A.UDF5 AS UDF5
+${eligValList}
                      FROM RECEIVED_ELIGIBILITY_LATEST_INFO_'||CURRENTTIMESTAMP||' A
                      LEFT JOIN '||MASTER_CLIENT_GROUP||' C ON A.GROUP_ID = C.GROUP_ID
                      JOIN RECEIVED_ELIGIBILITY_ENROLLMENT_'||CURRENTTIMESTAMP||' B ON A.MEMBER_KEY1 = B.MEMBER_KEY1';

@@ -1,6 +1,10 @@
 import { PX_RAW_FIELDS, PX_DEFAULTS } from './pharmacy.js';
 import { MED_RAW_FIELDS, MED_DEFAULTS } from './medical.js';
-import { ELIG_RAW_FIELDS, ELIG_DEFAULTS } from './eligibility.js';
+import {
+  ELIG_RAW_FIELDS,
+  ELIG_MEMBER_PLATFORM_DEFAULTS,
+  ELIG_ELIGIBILITY_PLATFORM_DEFAULTS,
+} from './eligibility.js';
 
 /** Default raw fields, mapping rows, and config object for pharmacy vs medical mode. */
 export function getModeDefaults(mode) {
@@ -13,6 +17,8 @@ export function getModeDefaults(mode) {
       isPx,
       defaultRaw: PX_RAW_FIELDS,
       defaultMaps: PX_DEFAULTS,
+      defaultMapsMember: null,
+      defaultMapsEligibility: null,
       defaultCfg: {
         clientName: 'MJHLIFESCIENCES',
         warehouse: 'MJHLIFESCIENCES',
@@ -30,6 +36,8 @@ export function getModeDefaults(mode) {
       isPx,
       defaultRaw: MED_RAW_FIELDS,
       defaultMaps: MED_DEFAULTS,
+      defaultMapsMember: null,
+      defaultMapsEligibility: null,
       defaultCfg: {
         clientName: 'MJHLIFESCIENCES',
         warehouse: 'MJHLIFESCIENCES',
@@ -48,14 +56,15 @@ export function getModeDefaults(mode) {
     storePfx,
     isPx,
     defaultRaw: ELIG_RAW_FIELDS,
-    defaultMaps: ELIG_DEFAULTS,
+    defaultMaps: [],
+    defaultMapsMember: ELIG_MEMBER_PLATFORM_DEFAULTS,
+    defaultMapsEligibility: ELIG_ELIGIBILITY_PLATFORM_DEFAULTS,
     defaultCfg: {
       clientName: 'MJHLIFESCIENCES',
       warehouse: 'MJHLIFESCIENCES',
       database: 'DATA_WAREHOUSE_DEV',
       schema: 'MJHLIFESCIENCES_SCRUB',
       streamTable: 'RAW_ELIGIBILITY_STREAM',
-      rawEligibilityTable: 'MJHLIFESCIENCES_DEV.RAW_ELIGIBILITY_PLATFORM',
       memberTable: 'MAP_MEMBER_PLATFORM',
       eligibilityTable: 'MAP_ELIGIBILITY_PLATFORM',
       masterClientGroup: 'REFDATA.GLOBAL_PROD.MASTER_CLIENT_GROUP',
@@ -66,14 +75,6 @@ export function getModeDefaults(mode) {
       memberSecondaryKeyExpression: 'TRIM(MEMBER_ID)',
       employeeRelationshipValue: 'EMPLOYEE',
       listaggDelimiter: ',',
-      carrierId: 'CIGNA',
-      carrierName: 'CIGNA',
-      benefitType: 'Medical',
-      policyId: 'BK',
-      defaultChEmployerId: '802',
-      planTypeExpression: 'NULL',
-      planIdExpression: 'GROUP_ID',
-      planNameExpression: 'GROUP_ID',
     },
   };
 }
