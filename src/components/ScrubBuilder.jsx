@@ -15,7 +15,7 @@ import { S, TYPE_META, TYPE_ORDER } from '../styles/scrubStyles.js';
 
 export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, ref) {
   const [tab, setTab] = useState('config');
-  const { storePfx, isPx, defaultRaw, defaultMaps, defaultCfg } = useMemo(
+  const { storePfx, isPx, defaultRaw, defaultMaps, defaultMapsMember, defaultMapsEligibility, defaultCfg } = useMemo(
     () => getModeDefaults(mode),
     [mode]
   );
@@ -25,6 +25,9 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
   const [cfg, setCfg]             = useState(defaultCfg);
   const [rawFields, setRawFields] = useState(defaultRaw);
   const [maps, setMaps]           = useState(defaultMaps.map(m=>({...m})));
+  const [mapsMember, setMapsMember] = useState(() => (defaultMapsMember || []).map(m => ({ ...m })));
+  const [mapsElig, setMapsElig]   = useState(() => (defaultMapsEligibility || []).map(m => ({ ...m })));
+  const [eligMapLayer, setEligMapLayer] = useState('member');
   const [typeFilter, setTypeFilter] = useState('all');
   const [search, setSearch]       = useState('');
   const [newField, setNewField]   = useState('');
@@ -40,50 +43,82 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
         const c = await window.storage.get(`${storePfx}_cfg`);
         const f = await window.storage.get(`${storePfx}_fields`);
         const m = await window.storage.get(`${storePfx}_maps`);
+        const mm = await window.storage.get(`${storePfx}_maps_member`);
+        const me = await window.storage.get(`${storePfx}_maps_eligibility`);
         if (c) setCfg(JSON.parse(c.value));
         if (f) setRawFields(JSON.parse(f.value));
-        if (m) setMaps(JSON.parse(m.value));
+        if (m && storePfx !== 'elig') setMaps(JSON.parse(m.value));
+        if (mm && storePfx === 'elig') setMapsMember(JSON.parse(mm.value));
+        if (me && storePfx === 'elig') setMapsElig(JSON.parse(me.value));
       } catch {}
     })();
   }, [storePfx]);
 
-  const persist = useCallback(async (c, f, m) => {
+  const persist = useCallback(async (c, f, m, mm, me) => {
     try {
-      await window.storage.set(`${storePfx}_cfg`,    JSON.stringify(c));
+      await window.storage.set(`${storePfx}_cfg`, JSON.stringify(c));
       await window.storage.set(`${storePfx}_fields`, JSON.stringify(f));
-      await window.storage.set(`${storePfx}_maps`,   JSON.stringify(m));
+      await window.storage.set(`${storePfx}_maps`, JSON.stringify(m));
+      if (storePfx === 'elig') {
+        await window.storage.set(`${storePfx}_maps_member`, JSON.stringify(mm));
+        await window.storage.set(`${storePfx}_maps_eligibility`, JSON.stringify(me));
+      }
     } catch {}
   }, [storePfx]);
 
-  useEffect(() => { persist(cfg, rawFields, maps); }, [cfg, rawFields, maps]);
+  useEffect(() => {
+    if (storePfx === 'elig') persist(cfg, rawFields, [], mapsMember, mapsElig);
+    else persist(cfg, rawFields, maps, null, null);
+  }, [cfg, rawFields, maps, mapsMember, mapsElig, storePfx, persist]);
 
   const doGenerate = useCallback(() => {
     const sql = isPx
       ? generatePharmacySQL(cfg, rawFields, maps)
       : isMedical
         ? generateMedicalSQL(cfg, rawFields, maps)
-        : generateEligibilitySQL(cfg, rawFields, maps);
+        : generateEligibilitySQL(cfg, rawFields, mapsMember, mapsElig);
     setSqlOutput(sql);
     setTab('generate');
-  }, [cfg, rawFields, maps, isPx, isMedical]);
+  }, [cfg, rawFields, mapsMember, mapsElig, isPx, isMedical]);
 
   const doReset = useCallback(() => {
     setRawFields(defaultRaw);
     setMaps(defaultMaps.map(m => ({ ...m })));
+    if (defaultMapsMember) setMapsMember(defaultMapsMember.map(m => ({ ...m })));
+    if (defaultMapsEligibility) setMapsElig(defaultMapsEligibility.map(m => ({ ...m })));
     setCfg(defaultCfg);
-  }, [defaultRaw, defaultMaps, defaultCfg]);
+    setEligMapLayer('member');
+  }, [defaultRaw, defaultMaps, defaultMapsMember, defaultMapsEligibility, defaultCfg]);
 
   useImperativeHandle(ref, () => ({
     generate: doGenerate,
     reset: doReset,
   }), [doGenerate, doReset]);
 
-  const updateMap = (idx, key, val) =>
-    setMaps(prev => { const n=[...prev]; n[idx]={...n[idx],[key]:val}; return n; });
+  const patchMapAt = (setter, idx, key, val) =>
+    setter(prev => {
+      const n = [...prev];
+      n[idx] = { ...n[idx], [key]: val };
+      return n;
+    });
 
-  const cycleType = (idx) =>
-    setMaps(prev => { const n=[...prev]; const c=TYPE_ORDER.indexOf(n[idx].type);
-      n[idx]={...n[idx],type:TYPE_ORDER[(c+1)%4],value:''}; return n; });
+  const updateMap = (idx, key, val) => {
+    if (!isEligibility) patchMapAt(setMaps, idx, key, val);
+    else if (eligMapLayer === 'member') patchMapAt(setMapsMember, idx, key, val);
+    else patchMapAt(setMapsElig, idx, key, val);
+  };
+
+  const cycleType = (idx) => {
+    const spin = prev => {
+      const n = [...prev];
+      const c = TYPE_ORDER.indexOf(n[idx].type);
+      n[idx] = { ...n[idx], type: TYPE_ORDER[(c + 1) % 4], value: '' };
+      return n;
+    };
+    if (!isEligibility) setMaps(spin);
+    else if (eligMapLayer === 'member') setMapsMember(spin);
+    else setMapsElig(spin);
+  };
 
   const handleCopy = () => {
     navigator.clipboard.writeText(sqlOutput).then(()=>{
@@ -121,29 +156,56 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
   };
   const handleDragEnd = () => setDragIdx(null);
 
+  const activeMaps = useMemo(() => {
+    if (!isEligibility) return maps;
+    return eligMapLayer === 'member' ? mapsMember : mapsElig;
+  }, [isEligibility, eligMapLayer, maps, mapsMember, mapsElig]);
+
+  const memberStagingTargets = useMemo(() => mapsMember.map(m => m.target), [mapsMember]);
+
   const filteredMaps = useMemo(
     () =>
-      maps
+      activeMaps
         .map((m, i) => ({ ...m, _i: i }))
         .filter(m => {
           const typeOk = typeFilter === 'all' || m.type === typeFilter;
           const q = search.toLowerCase();
+          const val = String(m.value ?? '').toLowerCase();
+          const ins = String(m.insertExpr ?? '').toLowerCase();
           const searchOk =
             !search ||
             m.target.toLowerCase().includes(q) ||
-            m.value.toLowerCase().includes(q);
+            val.includes(q) ||
+            ins.includes(q);
           return typeOk && searchOk;
         }),
-    [maps, typeFilter, search]
+    [activeMaps, typeFilter, search]
   );
 
-  const counts = useMemo(() => {
-    const c = { all: maps.length };
+  const layerCounts = useMemo(() => {
+    const c = { all: activeMaps.length };
     TYPE_ORDER.forEach(t => {
-      c[t] = maps.filter(m => m.type === t).length;
+      c[t] = activeMaps.filter(m => m.type === t).length;
     });
     return c;
-  }, [maps]);
+  }, [activeMaps]);
+
+  const allMapsCounts = useMemo(() => {
+    const src = isEligibility ? [...mapsMember, ...mapsElig] : maps;
+    const c = { all: src.length };
+    TYPE_ORDER.forEach(t => {
+      c[t] = src.filter(m => m.type === t).length;
+    });
+    return c;
+  }, [isEligibility, maps, mapsMember, mapsElig]);
+
+  const activeMapTotal = useMemo(() => {
+    if (!isEligibility) return maps.filter(m => m.type !== 'null').length;
+    return [mapsMember, mapsElig].reduce(
+      (n, arr) => n + arr.filter(m => m.type !== 'null').length,
+      0
+    );
+  }, [isEligibility, maps, mapsMember, mapsElig]);
 
   const cfgInput = (key, label, ph='') => (
     <div style={S.col()}>
@@ -173,7 +235,7 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
           }}>
             {t==='config'   && '01 · Client Config'}
             {t==='fields'   && `02 · Raw Fields (${rawFields.length})`}
-            {t==='mappings' && `03 · Mappings (${maps.filter(m=>m.type!=='null').length} active)`}
+            {t==='mappings' && `03 · Mappings (${activeMapTotal} active)`}
             {t==='generate' && '04 · Generate SQL'}
           </button>
         ))}
@@ -214,42 +276,25 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
                 {cfgInput('eligibilityTable','Eligibility Table','MAP_ELIGIBILITY_PLATFORM')}
               </div>
               <div style={S.row}>
-                {cfgInput('rawEligibilityTable','Raw Eligibility Table (optional ref)')}
                 {cfgInput('masterClientGroup','Master Client Group')}
+                {cfgInput('masterZip','Master ZIP Codes')}
               </div>
               <div style={S.row}>
-                {cfgInput('masterZip','Master ZIP Codes')}
                 {cfgInputPreserve('controlFileFilter','Control file exclude pattern','%CONTROLS%')}
+                <div style={S.col()} />
               </div>
               <div style={S.divider} />
-              <div style={S.sectionTitle}>Reconciliation (SQL expressions on mapped columns)</div>
+              <div style={S.sectionTitle}>Reconciliation (member key &amp; dependents)</div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
+                Uses columns produced by the stream → staging mapping. Defaults match typical Cigna-style feeds.
+              </div>
               <div style={S.row}>
                 {cfgInputPreserve('memberKeyExpression','MEMBER_KEY expression')}
                 {cfgInputPreserve('memberSecondaryKeyExpression','Secondary member key (LISTAGG)')}
               </div>
               <div style={S.row}>
-                {cfgInputPreserve('employeeRelationshipValue','Normalized employee relationship value','EMPLOYEE')}
+                {cfgInputPreserve('employeeRelationshipValue','Employee relationship value (data)','EMPLOYEE')}
                 {cfgInputPreserve('listaggDelimiter','LISTAGG delimiter',',')}
-              </div>
-              <div style={S.divider} />
-              <div style={S.sectionTitle}>Eligibility insert defaults</div>
-              <div style={S.row}>
-                {cfgInput('carrierId','Carrier ID')}
-                {cfgInput('carrierName','Carrier Name')}
-              </div>
-              <div style={S.row}>
-                {cfgInput('benefitType','Benefit Type','MEDICAL')}
-                {cfgInput('policyId','Policy ID')}
-              </div>
-              <div style={S.row}>
-                {cfgInput('defaultChEmployerId','Default CH_EMPLOYER_ID (if not from master)','802')}
-              </div>
-              <div style={S.row}>
-                {cfgInputPreserve('planTypeExpression','PLAN_TYPE SQL expression','NULL')}
-                {cfgInputPreserve('planIdExpression','PLAN_ID SQL expression','GROUP_ID')}
-              </div>
-              <div style={S.row}>
-                {cfgInputPreserve('planNameExpression','PLAN_NAME SQL expression','GROUP_ID')}
               </div>
             </>)}
           </div>
@@ -266,7 +311,10 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:20}}>
               <div>
                 <div style={{fontSize:16,fontWeight:700,marginBottom:4}}>Raw Source Fields</div>
-                <div style={{fontSize:12,color:'#6b7280'}}>Drag to reorder · Generates the UPPER/TRIM dedup block</div>
+                <div style={{fontSize:12,color:'#6b7280'}}>
+                  Drag to reorder · Generates the UPPER/TRIM dedup block
+                  {isEligibility && ' · Member mapping references these raw column names (same idea as pharmacy / medical)'}
+                </div>
               </div>
               <div style={{display:'flex',gap:8,alignItems:'center'}}>
                 <span style={{fontSize:11,color:'#6b7280',fontFamily:"'DM Mono',monospace"}}>{rawFields.length} fields</span>
@@ -323,17 +371,38 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
 
       {tab==='mappings' && (
         <div style={S.main}>
+          {isEligibility && (
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+              {[
+                { id: 'member', label: '01 · MAP_MEMBER_PLATFORM' },
+                { id: 'eligibility', label: '02 · MAP_ELIGIBILITY_PLATFORM' },
+              ].map(({ id, label }) => (
+                <button
+                  key={id}
+                  type="button"
+                  style={S.pillFilter(eligMapLayer === id, accent)}
+                  onClick={() => { setEligMapLayer(id); setTypeFilter('all'); setSearch(''); }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:14,flexWrap:'wrap'}}>
             <input style={{...S.input,width:240}} placeholder="Search target field or value..."
               value={search} onChange={e=>setSearch(e.target.value)} />
             <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
               {['all',...TYPE_ORDER].map(t=>(
                 <button key={t} style={S.pillFilter(typeFilter===t,accent)} onClick={()=>setTypeFilter(t)}>
-                  {t.toUpperCase()} {counts[t]||''}
+                  {t.toUpperCase()} {layerCounts[t]||''}
                 </button>
               ))}
             </div>
-            <div style={{marginLeft:'auto',fontSize:11,color:'#4b5563'}}>Click badge to cycle type</div>
+            <div style={{marginLeft:'auto',fontSize:11,color:'#4b5563',maxWidth:340,textAlign:'right'}}>
+              {isEligibility && eligMapLayer === 'member' && 'Staging from raw (like pharmacy). Optional insert override uses A/B/C after reconciliation.'}
+              {isEligibility && eligMapLayer === 'eligibility' && 'Final eligibility load: A = latest member row, B = enrollment, C = client group.'}
+              {!isEligibility && 'Click badge to cycle type'}
+            </div>
           </div>
           <div style={S.tableContainer}>
             <table style={S.table}>
@@ -342,14 +411,55 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
                   <th style={{...S.th,width:40}}>#</th>
                   <th style={S.th}>Target Field</th>
                   <th style={{...S.th,width:110}}>Type</th>
-                  <th style={S.th}>Expression / Value</th>
+                  {isEligibility && eligMapLayer === 'member' ? (
+                    <>
+                      <th style={S.th}>From raw (staging)</th>
+                      <th style={S.th}>Insert override (optional)</th>
+                    </>
+                  ) : (
+                    <th style={S.th}>Expression / Value</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {filteredMaps.map(m=>{
                   const i=m._i;
+                  const rowKey = `${isEligibility ? eligMapLayer : 'px'}:${m.target}:${i}`;
+                  const isEligMember = isEligibility && eligMapLayer === 'member';
+                  const directOptions = isEligibility && eligMapLayer === 'eligibility' ? memberStagingTargets : rawFields;
+                  const directLabel = isEligibility && eligMapLayer === 'eligibility'
+                    ? '— staging column —'
+                    : '— select raw field —';
+                  const exprPh = isEligibility && eligMapLayer === 'member'
+                    ? 'SQL over raw columns (staging)'
+                    : isEligibility && eligMapLayer === 'eligibility'
+                      ? 'SQL (A=latest, B=enrollment, C=master group)'
+                      : 'SQL expression';
+                  const stagingCell = (
+                    <>
+                      {m.type==='null' ? (
+                        <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,color:'#374151'}}>— NULL —</span>
+                      ) : m.type==='direct' ? (
+                        <select style={{...S.typeSelect,width:'100%'}} value={m.value}
+                          onChange={e=>updateMap(i,'value',e.target.value)}>
+                          <option value="">{directLabel}</option>
+                          {directOptions.map(f=><option key={f} value={f}>{f}</option>)}
+                        </select>
+                      ) : m.type==='hardcoded' ? (
+                        <input style={{...S.input,width:'100%',padding:'5px 10px'}}
+                          value={m.value} onChange={e=>updateMap(i,'value',e.target.value)}
+                          placeholder="Literal value (no quotes needed)" />
+                      ) : (
+                        <textarea ref={el=>{ textareaRefs.current[rowKey]=el; }}
+                          style={{...S.input,width:'100%',resize:'vertical',minHeight:36,padding:'5px 10px',lineHeight:1.5}}
+                          value={m.value} rows={m.value.length>80?3:1}
+                          onChange={e=>updateMap(i,'value',e.target.value)}
+                          placeholder={exprPh} />
+                      )}
+                    </>
+                  );
                   return (
-                    <tr key={m.target} style={{background:i%2===0?'#0f1521':'transparent'}}>
+                    <tr key={rowKey} style={{background:i%2===0?'#0f1521':'transparent'}}>
                       <td style={{...S.tdBase,color:'#374151',fontFamily:"'DM Mono',monospace",fontSize:10}}>{i+1}</td>
                       <td style={S.tdBase}>
                         <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,color:m.type==='null'?'#4b5563':'#e2e8f0'}}>
@@ -361,27 +471,22 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
                           {TYPE_META[m.type].label}
                         </span>
                       </td>
-                      <td style={{...S.tdBase,width:'55%'}}>
-                        {m.type==='null' ? (
-                          <span style={{fontFamily:"'DM Mono',monospace",fontSize:11,color:'#374151'}}>— NULL —</span>
-                        ) : m.type==='direct' ? (
-                          <select style={{...S.typeSelect,width:'100%'}} value={m.value}
-                            onChange={e=>updateMap(i,'value',e.target.value)}>
-                            <option value="">— select raw field —</option>
-                            {rawFields.map(f=><option key={f} value={f}>{f}</option>)}
-                          </select>
-                        ) : m.type==='hardcoded' ? (
-                          <input style={{...S.input,width:'100%',padding:'5px 10px'}}
-                            value={m.value} onChange={e=>updateMap(i,'value',e.target.value)}
-                            placeholder="Literal value (no quotes needed)" />
-                        ) : (
-                          <textarea ref={el=>textareaRefs.current[i]=el}
-                            style={{...S.input,width:'100%',resize:'vertical',minHeight:36,padding:'5px 10px',lineHeight:1.5}}
-                            value={m.value} rows={m.value.length>80?3:1}
-                            onChange={e=>updateMap(i,'value',e.target.value)}
-                            placeholder="SQL expression" />
-                        )}
-                      </td>
+                      {isEligMember ? (
+                        <>
+                          <td style={{...S.tdBase,width:'28%'}}>{stagingCell}</td>
+                          <td style={{...S.tdBase,width:'28%'}}>
+                            <textarea
+                              style={{...S.input,width:'100%',resize:'vertical',minHeight:36,padding:'5px 10px',lineHeight:1.5}}
+                              value={m.insertExpr ?? ''}
+                              rows={(m.insertExpr || '').length > 60 ? 3 : 1}
+                              onChange={e => updateMap(i, 'insertExpr', e.target.value)}
+                              placeholder="Blank → A.<target> (or NULL)"
+                            />
+                          </td>
+                        </>
+                      ) : (
+                        <td style={{...S.tdBase,width:'55%'}}>{stagingCell}</td>
+                      )}
                     </tr>
                   );
                 })}
@@ -409,7 +514,7 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
             {TYPE_ORDER.map(t=>(
               <div key={t} style={{padding:'8px 14px',borderRadius:8,background:TYPE_META[t].bg,
                 border:`1px solid ${TYPE_META[t].border}`,display:'flex',gap:8,alignItems:'center'}}>
-                <span style={{fontSize:18,fontWeight:800,color:TYPE_META[t].color}}>{counts[t]}</span>
+                <span style={{fontSize:18,fontWeight:800,color:TYPE_META[t].color}}>{allMapsCounts[t]}</span>
                 <span style={{fontSize:10,fontWeight:700,color:TYPE_META[t].color,letterSpacing:'0.5px'}}>{t.toUpperCase()}</span>
               </div>
             ))}
