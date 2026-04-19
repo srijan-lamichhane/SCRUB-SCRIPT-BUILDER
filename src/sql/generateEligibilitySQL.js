@@ -80,7 +80,7 @@ export function generateEligibilitySQL(cfg, rawFields, mapsMember, mapsEligibili
   const eligValList = buildInsertSelectValues(mapsEligibility, esc, pad);
   const listaggComma = "''" + "," + "''";
 
-  return `CREATE OR REPLACE PROCEDURE ${cfg.schema}.SP_SCRUB_STREAM_${cfg.clientName}_ELIGIBILITY()
+  return `CREATE OR REPLACE PROCEDURE REFDATA.DATA_DEV.SP_SCRUB_STREAM_${cfg.clientName}_ELIGIBILITY()
 RETURNS VARCHAR
 LANGUAGE SQL
 EXECUTE AS CALLER

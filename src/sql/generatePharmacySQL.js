@@ -5,7 +5,7 @@ export function generatePharmacySQL(cfg, rawFields, maps) {
   const esc = s => s.replace(/'/g, "''");
   const pad = (n, s) => ' '.repeat(n) + s;
   const dedupCols = rawFields.filter(f => !PX_MAX_FIELDS.has(f))
-    .map(f => pad(20, `,UPPER(NULLIF(TRIM(${f}), '')) AS ${f}`)).join('\n');
+    .map(f => pad(20, `,UPPER(NULLIF(TRIM(${f}), '''')) AS ${f}`)).join('\n');
   const maxCols = [...PX_MAX_FIELDS].filter(f => rawFields.includes(f))
     .map(f => pad(20, `,MAX(${f}) AS ${f}`)).join('\n');
   const ddlBody = PX_STAGE_DDL.map((c,i) => pad(22, (i===0?'':',')+c)).join('\n');
@@ -15,7 +15,7 @@ export function generatePharmacySQL(cfg, rawFields, maps) {
     return `${i===0 ? pad(21,'') : pad(21,', ')}${expr} AS ${m.target}`;
   }).join('\n');
 
-  return `CREATE OR REPLACE PROCEDURE ${cfg.schema}.SP_SCRUB_STREAM_${cfg.clientName}_PHARMACY()
+  return `CREATE OR REPLACE PROCEDURE REFDATA.DATA_DEV.SP_SCRUB_STREAM_${cfg.clientName}_PHARMACY()
 RETURNS VARCHAR
 LANGUAGE SQL
 EXECUTE AS CALLER
