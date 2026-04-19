@@ -1,12 +1,12 @@
-import { PX_RAW_FIELDS, PX_DEFAULTS } from './pharmacy.js';
-import { MED_RAW_FIELDS, MED_DEFAULTS } from './medical.js';
 import {
-  ELIG_RAW_FIELDS,
-  ELIG_MEMBER_PLATFORM_DEFAULTS,
-  ELIG_ELIGIBILITY_PLATFORM_DEFAULTS,
-} from './eligibility.js';
+  createEmptyPharmacyMaps,
+  createEmptyMedicalMaps,
+  createEmptyEligibilityMemberMaps,
+  createEmptyEligibilityEligMaps,
+} from './vendorPresets.js';
 
-/** Default raw fields, mapping rows, and config object for pharmacy vs medical mode. */
+/** Default raw fields, mapping rows, and config object for pharmacy vs medical mode.
+ *  Initial layout is empty (no raw columns, all-null mappings) until a vendor preset is applied. */
 export function getModeDefaults(mode) {
   const isPx = mode === 'pharmacy';
   const isMedical = mode === 'medical';
@@ -15,8 +15,8 @@ export function getModeDefaults(mode) {
     return {
       storePfx,
       isPx,
-      defaultRaw: PX_RAW_FIELDS,
-      defaultMaps: PX_DEFAULTS,
+      defaultRaw: [],
+      defaultMaps: createEmptyPharmacyMaps(),
       defaultMapsMember: null,
       defaultMapsEligibility: null,
       defaultCfg: {
@@ -34,8 +34,8 @@ export function getModeDefaults(mode) {
     return {
       storePfx,
       isPx,
-      defaultRaw: MED_RAW_FIELDS,
-      defaultMaps: MED_DEFAULTS,
+      defaultRaw: [],
+      defaultMaps: createEmptyMedicalMaps(),
       defaultMapsMember: null,
       defaultMapsEligibility: null,
       defaultCfg: {
@@ -55,10 +55,10 @@ export function getModeDefaults(mode) {
   return {
     storePfx,
     isPx,
-    defaultRaw: ELIG_RAW_FIELDS,
+    defaultRaw: [],
     defaultMaps: [],
-    defaultMapsMember: ELIG_MEMBER_PLATFORM_DEFAULTS,
-    defaultMapsEligibility: ELIG_ELIGIBILITY_PLATFORM_DEFAULTS,
+    defaultMapsMember: createEmptyEligibilityMemberMaps(),
+    defaultMapsEligibility: createEmptyEligibilityEligMaps(),
     defaultCfg: {
       clientName: 'MJHLIFESCIENCES',
       warehouse: 'MJHLIFESCIENCES',

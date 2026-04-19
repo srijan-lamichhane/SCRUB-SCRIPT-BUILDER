@@ -8,6 +8,13 @@ import {
   useImperativeHandle,
 } from 'react';
 import { getModeDefaults } from '../constants/modeDefaults.js';
+import {
+  VENDOR_PRESETS,
+  createEmptyPharmacyMaps,
+  createEmptyMedicalMaps,
+  createEmptyEligibilityMemberMaps,
+  createEmptyEligibilityEligMaps,
+} from '../constants/vendorPresets.js';
 import { generatePharmacySQL } from '../sql/generatePharmacySQL.js';
 import { generateMedicalSQL } from '../sql/generateMedicalSQL.js';
 import { generateEligibilitySQL } from '../sql/generateEligibilitySQL.js';
@@ -24,7 +31,7 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
 
   const [cfg, setCfg]             = useState(defaultCfg);
   const [rawFields, setRawFields] = useState(defaultRaw);
-  const [maps, setMaps]           = useState(defaultMaps.map(m=>({...m})));
+  const [maps, setMaps]           = useState(() => defaultMaps.map(m => ({ ...m })));
   const [mapsMember, setMapsMember] = useState(() => (defaultMapsMember || []).map(m => ({ ...m })));
   const [mapsElig, setMapsElig]   = useState(() => (defaultMapsEligibility || []).map(m => ({ ...m })));
   const [eligMapLayer, setEligMapLayer] = useState('member');
@@ -81,19 +88,45 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
     setTab('generate');
   }, [cfg, rawFields, mapsMember, mapsElig, isPx, isMedical]);
 
-  const doReset = useCallback(() => {
-    setRawFields(defaultRaw);
-    setMaps(defaultMaps.map(m => ({ ...m })));
-    if (defaultMapsMember) setMapsMember(defaultMapsMember.map(m => ({ ...m })));
-    if (defaultMapsEligibility) setMapsElig(defaultMapsEligibility.map(m => ({ ...m })));
-    setCfg(defaultCfg);
+  /** Empty raw list + all-null mappings (same row count as templates). Client config unchanged. */
+  const clearLayout = useCallback(() => {
+    setRawFields([]);
+    if (isPx) setMaps(createEmptyPharmacyMaps().map(m => ({ ...m })));
+    else if (isMedical) setMaps(createEmptyMedicalMaps().map(m => ({ ...m })));
+    else {
+      setMapsMember(createEmptyEligibilityMemberMaps().map(m => ({ ...m })));
+      setMapsElig(createEmptyEligibilityEligMaps().map(m => ({ ...m })));
+    }
     setEligMapLayer('member');
-  }, [defaultRaw, defaultMaps, defaultMapsMember, defaultMapsEligibility, defaultCfg]);
+  }, [isPx, isMedical, isEligibility]);
+
+  const applyVendorPreset = useCallback((presetId) => {
+    if (isPx) {
+      const p = VENDOR_PRESETS.pharmacy[presetId];
+      if (!p) return;
+      setRawFields([...p.rawFields]);
+      setMaps(p.maps.map(m => ({ ...m })));
+      return;
+    }
+    if (isMedical) {
+      const p = VENDOR_PRESETS.medical[presetId];
+      if (!p) return;
+      setRawFields([...p.rawFields]);
+      setMaps(p.maps.map(m => ({ ...m })));
+      return;
+    }
+    const p = VENDOR_PRESETS.eligibility[presetId];
+    if (!p) return;
+    setRawFields([...p.rawFields]);
+    setMapsMember(p.mapsMember.map(m => ({ ...m })));
+    setMapsElig(p.mapsEligibility.map(m => ({ ...m })));
+  }, [isPx, isMedical, isEligibility]);
 
   useImperativeHandle(ref, () => ({
     generate: doGenerate,
-    reset: doReset,
-  }), [doGenerate, doReset]);
+    clearLayout,
+    applyVendorPreset,
+  }), [doGenerate, clearLayout, applyVendorPreset]);
 
   const patchMapAt = (setter, idx, key, val) =>
     setter(prev => {

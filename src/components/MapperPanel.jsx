@@ -1,6 +1,46 @@
 import { useRef } from 'react';
 import { ScrubBuilder } from './ScrubBuilder.jsx';
+import {
+  VENDOR_PRESETS,
+  PHARMACY_VENDOR_ORDER,
+  MEDICAL_VENDOR_ORDER,
+  ELIGIBILITY_VENDOR_ORDER,
+} from '../constants/vendorPresets.js';
 import { MODE_META, S } from '../styles/scrubStyles.js';
+
+function VendorButtons({ mode, scrubRef, accent }) {
+  const order =
+    mode === 'pharmacy'
+      ? PHARMACY_VENDOR_ORDER
+      : mode === 'medical'
+        ? MEDICAL_VENDOR_ORDER
+        : ELIGIBILITY_VENDOR_ORDER;
+  const bucket =
+    mode === 'pharmacy'
+      ? VENDOR_PRESETS.pharmacy
+      : mode === 'medical'
+        ? VENDOR_PRESETS.medical
+        : VENDOR_PRESETS.eligibility;
+
+  return (
+    <>
+      {order.map(id => (
+        <button
+          key={id}
+          type="button"
+          style={{
+            ...S.btn('ghost'),
+            borderColor: `${accent}55`,
+            color: accent,
+          }}
+          onClick={() => scrubRef.current?.applyVendorPreset(id)}
+        >
+          {bucket[id].label}
+        </button>
+      ))}
+    </>
+  );
+}
 
 export function MapperPanel({ mode }) {
   const m = MODE_META[mode];
@@ -23,10 +63,11 @@ export function MapperPanel({ mode }) {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-          <button type="button" style={S.btn('ghost')} onClick={() => scrubRef.current?.reset()}>
-            Reset to Default
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button type="button" style={S.btn('ghost')} onClick={() => scrubRef.current?.clearLayout()}>
+            Clear layout
           </button>
+          <VendorButtons mode={mode} scrubRef={scrubRef} accent={m.color} />
           <button
             type="button"
             style={{ ...S.btn('primary'), background: m.color }}
