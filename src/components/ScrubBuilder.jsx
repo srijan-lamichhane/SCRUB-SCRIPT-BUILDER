@@ -19,6 +19,7 @@ import { generatePharmacySQL } from '../sql/generatePharmacySQL.js';
 import { generateMedicalSQL } from '../sql/generateMedicalSQL.js';
 import { generateEligibilitySQL } from '../sql/generateEligibilitySQL.js';
 import { S, TYPE_META, TYPE_ORDER } from '../styles/scrubStyles.js';
+import { mergeMappingsFromJson } from '../utils/importMappingsJson.js';
 
 export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, ref) {
   const [tab, setTab] = useState('config');
@@ -42,7 +43,9 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
   const [dragIdx, setDragIdx]     = useState(null);
   const [sqlOutput, setSqlOutput] = useState('');
   const [copied, setCopied]       = useState(false);
+  const [importMapError, setImportMapError] = useState('');
   const textareaRefs              = useRef({});
+  const importMapsFileRef         = useRef(null);
 
   useEffect(() => {
     (async () => {
@@ -86,7 +89,7 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
         : generateEligibilitySQL(cfg, rawFields, mapsMember, mapsElig);
     setSqlOutput(sql);
     setTab('generate');
-  }, [cfg, rawFields, mapsMember, mapsElig, isPx, isMedical]);
+  }, [cfg, rawFields, maps, mapsMember, mapsElig, isPx, isMedical]);
 
   /** Empty raw list + all-null mappings (same row count as templates). Client config unchanged. */
   const clearLayout = useCallback(() => {
@@ -188,6 +191,46 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
     setDragIdx(over);
   };
   const handleDragEnd = () => setDragIdx(null);
+
+  const applyImportedMaps = useCallback(
+    (parsed) => {
+      const base =
+        !isEligibility ? maps : eligMapLayer === 'member' ? mapsMember : mapsElig;
+      const result = mergeMappingsFromJson(base, parsed);
+      if (!result.ok) {
+        setImportMapError(result.error);
+        return;
+      }
+      setImportMapError('');
+      if (!isEligibility) setMaps(result.maps);
+      else if (eligMapLayer === 'member') setMapsMember(result.maps);
+      else setMapsElig(result.maps);
+    },
+    [isEligibility, eligMapLayer, maps, mapsMember, mapsElig]
+  );
+
+  const handleImportMappingsFile = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setImportMapError('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result ?? '');
+        const parsed = JSON.parse(text);
+        applyImportedMaps(parsed);
+      } catch (err) {
+        setImportMapError(
+          err instanceof SyntaxError
+            ? 'Invalid JSON: could not parse the file.'
+            : `Could not read file: ${err?.message || String(err)}`
+        );
+      }
+    };
+    reader.onerror = () => setImportMapError('Could not read the selected file.');
+    reader.readAsText(file, 'UTF-8');
+  };
 
   const activeMaps = useMemo(() => {
     if (!isEligibility) return maps;
@@ -431,11 +474,56 @@ export const ScrubBuilder = forwardRef(function ScrubBuilder({ mode, accent }, r
                 </button>
               ))}
             </div>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input
+                ref={importMapsFileRef}
+                type="file"
+                accept=".json,application/json"
+                style={{ display: 'none' }}
+                onChange={handleImportMappingsFile}
+              />
+              <button
+                type="button"
+                style={{ ...S.btn('ghost', accent), borderColor: `${accent}55`, color: accent, whiteSpace: 'nowrap' }}
+                onClick={() => {
+                  setImportMapError('');
+                  importMapsFileRef.current?.click();
+                }}
+              >
+                Import mappings JSON
+              </button>
+            </div>
             <div style={{marginLeft:'auto',fontSize:11,color:'#4b5563',maxWidth:340,textAlign:'right'}}>
               {isEligibility && eligMapLayer === 'member' && 'Staging from raw (like pharmacy). Optional insert override uses A/B/C after reconciliation.'}
               {isEligibility && eligMapLayer === 'eligibility' && 'Final eligibility load: A = latest member row, B = enrollment, C = client group.'}
               {!isEligibility && 'Click badge to cycle type'}
             </div>
+          </div>
+          {importMapError ? (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: '10px 14px',
+                borderRadius: 8,
+                background: 'rgba(239,68,68,0.12)',
+                border: '1px solid rgba(239,68,68,0.35)',
+                color: '#fca5a5',
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+              role="alert"
+            >
+              {importMapError}
+            </div>
+          ) : null}
+          <div style={{ fontSize: 11, color: '#6b7280', marginBottom: 12, lineHeight: 1.5 }}>
+            JSON must be an array of objects like{' '}
+            <code style={{ color: '#9ca3af' }}>{`{ "target": "MEMBER_ID", "type": "expression", "value": "..." }`}</code>
+            . Every <code style={{ color: '#9ca3af' }}>target</code> must exist in this table; unknown targets are rejected.
+            {isEligibility && eligMapLayer === 'member'
+              ? ' Member layer rows may include optional "insertExpr".'
+              : null}
+            {' '}Unlisted targets are left unchanged.
           </div>
           <div style={S.tableContainer}>
             <table style={S.table}>
